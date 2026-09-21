@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ticket Log Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1c1f25;
+    --panel-2: #23262d;
+    --border: #2e323b;
+    --text: #eceef1;
+    --text-dim: #9aa0ab;
+    --amber: #ffb020;
+    --amber-dim: #4a380f;
+    --teal: #4dd9c4;
+    --red: #ff6b6b;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --sans: 'Inter', system-ui, sans-serif;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  /* Deliberately a single dark industrial theme (like a handheld scanner unit) —
+     kept consistent regardless of system color scheme, since low-glare dark UI
+     is the functional norm for camera/scanner tools used in warehouses/outdoors. */
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; } }
+  :root[data-theme="dark"] { color-scheme: dark; }
+
+  * { box-sizing: border-box; }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+
+  header {
+    padding: env(safe-area-inset-top, 0px) 16px 0;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #191c21, #14161a);
+  }
+  .header-inner { max-width: 640px; margin: 0 auto; padding: 14px 0 16px; }
+  .eyebrow-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  h1 {
+    font-family: var(--sans);
+    font-weight: 800;
+    font-size: 19px;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .subtitle { color: var(--text-dim); font-size: 12.5px; margin-top: 2px; }
+
+  main {
+    flex: 1;
+    max-width: 640px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 16px 16px calc(96px + env(safe-area-inset-bottom, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .ticket-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  .ticket-label { font-size: 11.5px; color: var(--text-dim); font-weight: 600; }
+  .ticket-number-wrap { display: flex; align-items: baseline; gap: 4px; margin-top: 2px; }
+  .ticket-hash { font-family: var(--mono); font-size: 22px; color: var(--amber-dim); font-weight: 600; }
+  #ticketInput {
+    font-family: var(--mono);
+    font-size: 34px;
+    font-weight: 700;
+    color: var(--amber);
+    background: transparent;
+    border: none;
+    width: 5.5ch;
+    padding: 0;
+    text-shadow: 0 0 18px rgba(255,176,32,0.35);
+  }
+  #ticketInput:focus { outline: none; }
+  .ticket-edit-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: right;
+    max-width: 120px;
+    line-height: 1.35;
+  }
+
+  .mode-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px;
+  }
+  .segmented {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    background: var(--panel-2);
+    border-radius: 10px;
+    padding: 4px;
+    gap: 4px;
+  }
+  .segmented button {
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 13.5px;
+    padding: 10px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .segmented button.active.part { background: var(--amber); color: #201503; }
+  .segmented button.active.location { background: var(--teal); color: #04211c; }
+
+  .location-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .location-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--teal); flex-shrink: 0; box-shadow: 0 0 8px var(--teal); }
+  .location-dot.unset { background: var(--text-dim); box-shadow: none; }
+  .location-text { font-family: var(--mono); font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .location-text.unset { color: var(--text-dim); font-family: var(--sans); font-style: italic; }
+
+  .scan-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .viewfinder {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    background: #0a0b0d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .viewfinder video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: none;
+  }
+  .viewfinder.live video { display: block; }
+  .reticle {
+    position: absolute;
+    inset: 14%;
+    border: 2px solid rgba(255,176,32,0.55);
+    border-radius: 16px;
+    pointer-events: none;
+    box-shadow: 0 0 0 999px rgba(0,0,0,0.28);
+  }
+  .viewfinder.live .reticle { display: block; }
+  .reticle { display: none; }
+  .scan-line {
+    position: absolute;
+    left: 14%; right: 14%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--amber), transparent);
+    top: 14%;
+    animation: sweep 2.1s ease-in-out infinite;
+    display: none;
+  }
+  .viewfinder.live .scan-line { display: block; }
+  @keyframes sweep {
+    0%, 100% { top: 14%; }
+    50% { top: 84%; }
+  }
+  .cam-placeholder {
+    text-align: center;
+    color: var(--text-dim);
+    padding: 24px;
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+  .cam-placeholder button, .scan-panel-controls button {
+    margin-top: 14px;
+    background: var(--amber);
+    color: #201503;
+    border: none;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 14.5px;
+    padding: 12px 22px;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .scan-panel-controls {
+    padding: 12px 14px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .status-text { font-size: 12.5px; color: var(--text-dim); flex: 1; min-height: 16px; }
+  .status-text.ok { color: var(--teal); }
+  .status-text.warn { color: var(--red); }
+  .stop-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 12.5px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  details.manual { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+  details.manual summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-dim); list-style: none; }
+  details.manual summary::-webkit-details-marker { display: none; }
+  .manual-body { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .manual-row { display: flex; gap: 8px; }
+  .manual-row input {
+    flex: 1;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    padding: 10px 12px;
+    border-radius: 9px;
+  }
+  .manual-row button {
+    border: none;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 13px;
+    padding: 0 14px;
+    border-radius: 9px;
+    cursor: pointer;
+    color: #14161a;
+  }
+  .manual-row button.part-btn { background: var(--amber); }
+  .manual-row button.loc-btn { background: var(--teal); }
+
+  .log-panel { display: flex; flex-direction: column; gap: 10px; }
+  .log-header { display: flex; align-items: center; justify-content: space-between; }
+  .log-title { font-weight: 700; font-size: 14.5px; }
+  .log-count { color: var(--text-dim); font-size: 12.5px; }
+  .clear-link { color: var(--red); font-size: 12.5px; font-weight: 600; background: none; border: none; cursor: pointer; padding: 0; }
+
+  .entry-list { display: flex; flex-direction: column; gap: 8px; }
+  .entry-empty {
+    background: var(--panel);
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    padding: 22px 16px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+  .entry-row {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: 10px;
+  }
+  .entry-ticket { font-family: var(--mono); font-weight: 700; color: var(--amber); font-size: 14px; }
+  .entry-mid { display: flex; flex-direction: column; overflow: hidden; }
+  .entry-part { font-family: var(--mono); font-size: 13.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .entry-loc { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .entry-qty { font-family: var(--mono); font-size: 13.5px; color: var(--teal); font-weight: 600; white-space: nowrap; }
+  .entry-del {
+    background: none; border: none; color: var(--text-dim);
+    font-size: 16px; cursor: pointer; padding: 4px 6px; line-height: 1;
+  }
+  .entry-del:hover { color: var(--red); }
+
+  footer {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(180deg, rgba(20,22,26,0), var(--bg) 30%);
+    display: flex;
+    justify-content: center;
+  }
+  .export-btn {
+    max-width: 608px;
+    width: 100%;
+    background: var(--teal);
+    color: #04211c;
+    border: none;
+    font-family: var(--sans);
+    font-weight: 800;
+    font-size: 15.5px;
+    padding: 15px;
+    border-radius: 12px;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(77,217,196,0.18);
+  }
+  .export-btn:disabled { opacity: 0.4; box-shadow: none; cursor: not-allowed; }
+
+  /* Quantity modal */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(8,9,11,0.72);
+    display: none;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 50;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal-sheet {
+    width: 100%;
+    max-width: 640px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 18px 18px 0 0;
+    padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+  .modal-grabber { width: 36px; height: 4px; background: var(--border); border-radius: 4px; margin: 0 auto 16px; }
+  .modal-label { font-size: 12px; color: var(--text-dim); font-weight: 600; }
+  .modal-part { font-family: var(--mono); font-size: 19px; font-weight: 700; margin-top: 2px; margin-bottom: 16px; word-break: break-all; }
+  .modal-qty-input {
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 30px;
+    font-weight: 700;
+    text-align: center;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--amber);
+    border-radius: 12px;
+    padding: 14px;
+  }
+  .modal-qty-input:focus { outline: 2px solid var(--amber); }
+  .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+  .modal-actions button {
+    flex: 1;
+    border: none;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 14.5px;
+    padding: 14px;
+    border-radius: 11px;
+    cursor: pointer;
+  }
+  .modal-cancel { background: var(--panel-2); color: var(--text-dim); }
+  .modal-confirm { background: var(--amber); color: #201503; }
+
+  :focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    .scan-line { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="eyebrow-row">
+      <h1>Ticket Log Scanner</h1>
+    </div>
+    <div class="subtitle">Scan a location, then scan parts to log ticket rows</div>
+  </div>
+</header>
+
+<main>
+
+  <div class="ticket-panel">
+    <div>
+      <div class="ticket-label">NEXT TICKET</div>
+      <div class="ticket-number-wrap">
+        <span class="ticket-hash">#</span>
+        <input id="ticketInput" type="number" inputmode="numeric" value="1000" aria-label="Next ticket number">
+      </div>
+    </div>
+    <div class="ticket-edit-hint">Edit to set the starting number. Increases by 1 each time a part is logged.</div>
+  </div>
+
+  <div class="mode-panel">
+    <div class="segmented" role="tablist" aria-label="Scan mode">
+      <button type="button" id="modePartBtn" class="part active">Scan Part</button>
+      <button type="button" id="modeLocationBtn" class="location">Scan Location</button>
+    </div>
+    <div class="location-row">
+      <span id="locationDot" class="location-dot unset"></span>
+      <span id="locationText" class="location-text unset">No location scanned yet</span>
+    </div>
+  </div>
+
+  <div class="scan-panel">
+    <div class="viewfinder" id="viewfinder">
+      <video id="video" playsinline muted></video>
+      <div class="reticle"></div>
+      <div class="scan-line"></div>
+      <div class="cam-placeholder" id="camPlaceholder">
+        Camera is off.<br>Start it to scan QR codes for parts and locations.
+        <br>
+        <button type="button" id="startCamBtn">Start Camera</button>
+      </div>
+    </div>
+    <div class="scan-panel-controls">
+      <div class="status-text" id="statusText">&nbsp;</div>
+      <button type="button" id="stopCamBtn" class="stop-btn" style="display:none;">Stop</button>
+    </div>
+  </div>
+
+  <details class="manual">
+    <summary>Manual entry (no camera / typed code)</summary>
+    <div class="manual-body">
+      <div class="manual-row">
+        <input type="text" id="manualPart" placeholder="Type a part number">
+        <button type="button" class="part-btn" id="manualPartBtn">Use as Part</button>
+      </div>
+      <div class="manual-row">
+        <input type="text" id="manualLoc" placeholder="Type a location code">
+        <button type="button" class="loc-btn" id="manualLocBtn">Use as Location</button>
+      </div>
+    </div>
+  </details>
+
+  <div class="log-panel">
+    <div class="log-header">
+      <span class="log-title">Log</span>
+      <span class="log-count" id="logCount">0 rows</span>
+    </div>
+    <div class="entry-list" id="entryList">
+      <div class="entry-empty" id="entryEmpty">No tickets logged yet. Scanned parts will appear here.</div>
+    </div>
+    <button type="button" class="clear-link" id="clearAllBtn" style="display:none; align-self:flex-end;">Clear all rows</button>
+  </div>
+
+</main>
+
+<footer>
+  <button type="button" class="export-btn" id="exportBtn" disabled>Export CSV</button>
+</footer>
+
+<div class="modal-backdrop" id="qtyModal">
+  <div class="modal-sheet">
+    <div class="modal-grabber"></div>
+    <div class="modal-label">PART NUMBER</div>
+    <div class="modal-part" id="modalPartText">—</div>
+    <div class="modal-label" style="margin-bottom:8px;">QUANTITY</div>
+    <input type="number" inputmode="numeric" id="modalQtyInput" class="modal-qty-input" placeholder="0" min="0">
+    <div class="modal-actions">
+      <button type="button" class="modal-cancel" id="modalCancelBtn">Cancel</button>
+      <button type="button" class="modal-confirm" id="modalConfirmBtn">Add to Log</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var state = {
+    nextTicket: 1000,
+    location: '',
+    mode: 'part', // 'part' | 'location'
+    entries: [],
+    stream: null,
+    scanning: false,
+    cooldownUntil: 0,
+    pendingPart: null
+  };
+
+  var els = {
+    ticketInput: document.getElementById('ticketInput'),
+    modePartBtn: document.getElementById('modePartBtn'),
+    modeLocationBtn: document.getElementById('modeLocationBtn'),
+    locationDot: document.getElementById('locationDot'),
+    locationText: document.getElementById('locationText'),
+    viewfinder: document.getElementById('viewfinder'),
+    video: document.getElementById('video'),
+    camPlaceholder: document.getElementById('camPlaceholder'),
+    startCamBtn: document.getElementById('startCamBtn'),
+    stopCamBtn: document.getElementById('stopCamBtn'),
+    statusText: document.getElementById('statusText'),
+    manualPart: document.getElementById('manualPart'),
+    manualPartBtn: document.getElementById('manualPartBtn'),
+    manualLoc: document.getElementById('manualLoc'),
+    manualLocBtn: document.getElementById('manualLocBtn'),
+    entryList: document.getElementById('entryList'),
+    entryEmpty: document.getElementById('entryEmpty'),
+    logCount: document.getElementById('logCount'),
+    clearAllBtn: document.getElementById('clearAllBtn'),
+    exportBtn: document.getElementById('exportBtn'),
+    qtyModal: document.getElementById('qtyModal'),
+    modalPartText: document.getElementById('modalPartText'),
+    modalQtyInput: document.getElementById('modalQtyInput'),
+    modalCancelBtn: document.getElementById('modalCancelBtn'),
+    modalConfirmBtn: document.getElementById('modalConfirmBtn')
+  };
+
+  var canvas = document.createElement('canvas');
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  function setStatus(msg, kind) {
+    els.statusText.textContent = msg || '\u00A0';
+    els.statusText.className = 'status-text' + (kind ? ' ' + kind : '');
+    state.statusExpiresAt = (kind === 'ok' || kind === 'warn') ? Date.now() + 3000 : 0;
+  }
+
+  // ---------- Ticket number ----------
+  els.ticketInput.addEventListener('input', function () {
+    var v = parseInt(els.ticketInput.value, 10);
+    state.nextTicket = isNaN(v) ? 0 : v;
+  });
+  els.ticketInput.addEventListener('blur', function () {
+    if (els.ticketInput.value === '' || isNaN(parseInt(els.ticketInput.value, 10))) {
+      els.ticketInput.value = state.nextTicket;
+    }
+  });
+
+  // ---------- Mode toggle ----------
+  function setMode(mode) {
+    state.mode = mode;
+    els.modePartBtn.classList.toggle('active', mode === 'part');
+    els.modeLocationBtn.classList.toggle('active', mode === 'location');
+  }
+  els.modePartBtn.addEventListener('click', function () { setMode('part'); });
+  els.modeLocationBtn.addEventListener('click', function () { setMode('location'); });
+
+  // ---------- Location display ----------
+  function setLocation(loc) {
+    state.location = loc;
+    els.locationText.textContent = loc || 'No location scanned yet';
+    els.locationText.classList.toggle('unset', !loc);
+    els.locationDot.classList.toggle('unset', !loc);
+  }
+
+  // ---------- Camera / scanning ----------
+  function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus('Camera access is not available in this browser.', 'warn');
+      return;
+    }
+    setStatus('Requesting camera…');
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+      .then(function (stream) {
+        state.stream = stream;
+        els.video.srcObject = stream;
+        return els.video.play();
+      })
+      .then(function () {
+        els.viewfinder.classList.add('live');
+        els.camPlaceholder.style.display = 'none';
+        els.stopCamBtn.style.display = 'inline-block';
+        state.scanning = true;
+        setStatus('Scanning — point camera at a QR code.');
+        requestAnimationFrame(tick);
+      })
+      .catch(function (err) {
+        setStatus('Could not access camera: ' + (err && err.message ? err.message : 'permission denied'), 'warn');
+      });
+  }
+
+  function stopCamera() {
+    state.scanning = false;
+    if (state.stream) {
+      state.stream.getTracks().forEach(function (t) { t.stop(); });
+      state.stream = null;
+    }
+    els.video.srcObject = null;
+    els.viewfinder.classList.remove('live');
+    els.camPlaceholder.style.display = 'block';
+    els.stopCamBtn.style.display = 'none';
+    setStatus('Camera stopped.');
+  }
+
+  els.startCamBtn.addEventListener('click', startCamera);
+  els.stopCamBtn.addEventListener('click', stopCamera);
+
+  var frameCount = 0;
+  var lastFrameCheckAt = 0;
+
+  function tick() {
+    if (!state.scanning) return;
+    try {
+      if (els.video.readyState === els.video.HAVE_ENOUGH_DATA) {
+        var w = els.video.videoWidth, h = els.video.videoHeight;
+        if (w && h) {
+          // Downscale for faster decode.
+          var scale = Math.min(1, 480 / Math.max(w, h));
+          canvas.width = Math.round(w * scale);
+          canvas.height = Math.round(h * scale);
+          ctx.drawImage(els.video, 0, 0, canvas.width, canvas.height);
+          var imgData;
+          try {
+            imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          } catch (e) {
+            imgData = null;
+          }
+          if (imgData) {
+            if (typeof jsQR !== 'function') {
+              setStatus('QR library failed to load — check your internet connection, then reload the page. Manual entry still works below.', 'warn');
+              state.scanning = false;
+              return;
+            }
+            frameCount++;
+            var code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'attemptBoth' });
+            if (code && code.data && Date.now() > state.cooldownUntil && !isModalOpen()) {
+              handleDecoded(code.data.trim());
+            } else if (!isModalOpen() && Date.now() > state.cooldownUntil) {
+              // Only overwrite the status with "scanning" chatter once any
+              // temporary confirmation/warning message has expired.
+              if (!state.statusExpiresAt || Date.now() > state.statusExpiresAt) {
+                setStatus(state.mode === 'location' ? 'Scanning for a location code…' : 'Scanning for a part code…');
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      setStatus('Scan error: ' + (err && err.message ? err.message : err) + ' — reload to retry.', 'warn');
+      state.scanning = false;
+      return;
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function isModalOpen() {
+    return els.qtyModal.classList.contains('open');
+  }
+
+  function handleDecoded(text) {
+    if (!text) return;
+    if (state.mode === 'location') {
+      state.cooldownUntil = Date.now() + 1800;
+      setLocation(text);
+      setStatus('Location set to "' + text + '". Switch to Scan Part to continue.', 'ok');
+    } else {
+      state.cooldownUntil = Date.now() + 1500; // extra guard while modal opens
+      openQtyModal(text);
+    }
+  }
+
+  // ---------- Manual entry fallback ----------
+  els.manualPartBtn.addEventListener('click', function () {
+    var v = els.manualPart.value.trim();
+    if (!v) return;
+    openQtyModal(v);
+    els.manualPart.value = '';
+  });
+  els.manualLocBtn.addEventListener('click', function () {
+    var v = els.manualLoc.value.trim();
+    if (!v) return;
+    setLocation(v);
+    setStatus('Location set to "' + v + '".', 'ok');
+    els.manualLoc.value = '';
+  });
+
+  // ---------- Quantity modal ----------
+  function openQtyModal(partNumber) {
+    state.pendingPart = partNumber;
+    els.modalPartText.textContent = partNumber;
+    els.modalQtyInput.value = '';
+    els.qtyModal.classList.add('open');
+    setTimeout(function () { els.modalQtyInput.focus(); }, 50);
+  }
+  function closeQtyModal() {
+    els.qtyModal.classList.remove('open');
+    state.pendingPart = null;
+    state.cooldownUntil = Date.now() + 600;
+  }
+  els.modalCancelBtn.addEventListener('click', function () {
+    setStatus('Scan discarded.');
+    closeQtyModal();
+  });
+  els.modalConfirmBtn.addEventListener('click', confirmAddEntry);
+  els.modalQtyInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') confirmAddEntry();
+  });
+
+  function confirmAddEntry() {
+    var qtyRaw = els.modalQtyInput.value;
+    var qty = parseInt(qtyRaw, 10);
+    if (qtyRaw === '' || isNaN(qty) || qty < 0) {
+      els.modalQtyInput.focus();
+      els.modalQtyInput.style.outline = '2px solid var(--red)';
+      setTimeout(function () { els.modalQtyInput.style.outline = ''; }, 700);
+      return;
+    }
+    var ticket = state.nextTicket;
+    state.entries.push({
+      ticket: ticket,
+      part: state.pendingPart,
+      qty: qty,
+      location: state.location
+    });
+    state.nextTicket = ticket + 1;
+    els.ticketInput.value = state.nextTicket;
+    renderEntries();
+    setStatus('Logged ticket #' + ticket + ' — ' + state.pendingPart + ' × ' + qty + '.', 'ok');
+    closeQtyModal();
+  }
+
+  // ---------- Log rendering ----------
+  function renderEntries() {
+    els.entryList.innerHTML = '';
+    if (state.entries.length === 0) {
+      els.entryList.appendChild(els.entryEmpty);
+      els.entryEmpty.style.display = 'block';
+    } else {
+      for (var i = state.entries.length - 1; i >= 0; i--) {
+        els.entryList.appendChild(buildRow(state.entries[i], i));
+      }
+    }
+    els.logCount.textContent = state.entries.length + (state.entries.length === 1 ? ' row' : ' rows');
+    els.exportBtn.disabled = state.entries.length === 0;
+    els.clearAllBtn.style.display = state.entries.length ? 'inline-block' : 'none';
+  }
+
+  function buildRow(entry, index) {
+    var row = document.createElement('div');
+    row.className = 'entry-row';
+
+    var ticketEl = document.createElement('div');
+    ticketEl.className = 'entry-ticket';
+    ticketEl.textContent = '#' + entry.ticket;
+
+    var mid = document.createElement('div');
+    mid.className = 'entry-mid';
+    var partEl = document.createElement('div');
+    partEl.className = 'entry-part';
+    partEl.textContent = entry.part;
+    var locEl = document.createElement('div');
+    locEl.className = 'entry-loc';
+    locEl.textContent = entry.location ? entry.location : 'no location';
+    mid.appendChild(partEl);
+    mid.appendChild(locEl);
+
+    var qtyEl = document.createElement('div');
+    qtyEl.className = 'entry-qty';
+    qtyEl.textContent = 'Qty ' + entry.qty;
+
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'entry-del';
+    delBtn.setAttribute('aria-label', 'Delete row');
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', function () {
+      state.entries.splice(index, 1);
+      renderEntries();
+      setStatus('Row removed.');
+    });
+
+    row.appendChild(ticketEl);
+    row.appendChild(mid);
+    row.appendChild(qtyEl);
+    row.appendChild(delBtn);
+    return row;
+  }
+
+  els.clearAllBtn.addEventListener('click', function () {
+    if (state.entries.length && confirm('Clear all ' + state.entries.length + ' logged rows? This cannot be undone.')) {
+      state.entries = [];
+      renderEntries();
+      setStatus('Log cleared.');
+    }
+  });
+
+  // ---------- CSV export ----------
+  function csvEscape(val) {
+    var s = String(val === undefined || val === null ? '' : val);
+    if (/[",\n]/.test(s)) {
+      s = '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+
+  function buildCsv() {
+    var lines = ['Ticket Number,Part Number,Quantity,Location'];
+    state.entries.forEach(function (e) {
+      lines.push([csvEscape(e.ticket), csvEscape(e.part), csvEscape(e.qty), csvEscape(e.location)].join(','));
+    });
+    return lines.join('\r\n') + '\r\n';
+  }
+
+  function fallbackDownload(csv, filename) {
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }
+
+  els.exportBtn.addEventListener('click', function () {
+    if (!state.entries.length) return;
+    var csv = buildCsv();
+    var filename = 'ticket-log-' + new Date().toISOString().slice(0, 10) + '.csv';
+
+    if (window.claude && typeof window.claude.use === 'function') {
+      window.claude.use('downloads').then(function (downloads) {
+        if (!downloads) { fallbackDownload(csv, filename); return; }
+        return downloads.save({ filename: filename, data: csv }).then(function () {
+          setStatus('CSV exported.', 'ok');
+        }).catch(function (err) {
+          if (err && err.code === 'declined') {
+            setStatus('Export cancelled.');
+          } else {
+            fallbackDownload(csv, filename);
+            setStatus('CSV downloaded.', 'ok');
+          }
+        });
+      }).catch(function () {
+        fallbackDownload(csv, filename);
+      });
+    } else {
+      fallbackDownload(csv, filename);
+      setStatus('CSV downloaded.', 'ok');
+    }
+  });
+
+  // ---------- Init ----------
+  setMode('part');
+  setLocation('');
+  renderEntries();
+  setStatus('Start the camera to begin scanning.');
+})();
+</script>
+</body>
+</html>
