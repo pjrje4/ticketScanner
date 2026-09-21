@@ -533,7 +533,6 @@
   function setStatus(msg, kind) {
     els.statusText.textContent = msg || '\u00A0';
     els.statusText.className = 'status-text' + (kind ? ' ' + kind : '');
-    state.statusExpiresAt = (kind === 'ok' || kind === 'warn') ? Date.now() + 3000 : 0;
   }
 
   // ---------- Ticket number ----------
@@ -606,50 +605,29 @@
   els.startCamBtn.addEventListener('click', startCamera);
   els.stopCamBtn.addEventListener('click', stopCamera);
 
-  var frameCount = 0;
-  var lastFrameCheckAt = 0;
-
   function tick() {
     if (!state.scanning) return;
-    try {
-      if (els.video.readyState === els.video.HAVE_ENOUGH_DATA) {
-        var w = els.video.videoWidth, h = els.video.videoHeight;
-        if (w && h) {
-          // Downscale for faster decode.
-          var scale = Math.min(1, 480 / Math.max(w, h));
-          canvas.width = Math.round(w * scale);
-          canvas.height = Math.round(h * scale);
-          ctx.drawImage(els.video, 0, 0, canvas.width, canvas.height);
-          var imgData;
-          try {
-            imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          } catch (e) {
-            imgData = null;
-          }
-          if (imgData) {
-            if (typeof jsQR !== 'function') {
-              setStatus('QR library failed to load — check your internet connection, then reload the page. Manual entry still works below.', 'warn');
-              state.scanning = false;
-              return;
-            }
-            frameCount++;
-            var code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'attemptBoth' });
-            if (code && code.data && Date.now() > state.cooldownUntil && !isModalOpen()) {
-              handleDecoded(code.data.trim());
-            } else if (!isModalOpen() && Date.now() > state.cooldownUntil) {
-              // Only overwrite the status with "scanning" chatter once any
-              // temporary confirmation/warning message has expired.
-              if (!state.statusExpiresAt || Date.now() > state.statusExpiresAt) {
-                setStatus(state.mode === 'location' ? 'Scanning for a location code…' : 'Scanning for a part code…');
-              }
-            }
+    if (els.video.readyState === els.video.HAVE_ENOUGH_DATA) {
+      var w = els.video.videoWidth, h = els.video.videoHeight;
+      if (w && h) {
+        // Downscale for faster decode.
+        var scale = Math.min(1, 480 / Math.max(w, h));
+        canvas.width = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        ctx.drawImage(els.video, 0, 0, canvas.width, canvas.height);
+        var imgData;
+        try {
+          imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        } catch (e) {
+          imgData = null;
+        }
+        if (imgData) {
+          var code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
+          if (code && code.data && Date.now() > state.cooldownUntil && !isModalOpen()) {
+            handleDecoded(code.data.trim());
           }
         }
       }
-    } catch (err) {
-      setStatus('Scan error: ' + (err && err.message ? err.message : err) + ' — reload to retry.', 'warn');
-      state.scanning = false;
-      return;
     }
     requestAnimationFrame(tick);
   }
